@@ -10,3 +10,7 @@ azure-devops-identity
 .DS_Store
 *.swp
 node_modules/
+
+# namespaced statusline caches, should they ever land next to the scripts
+azure-devops-*.json
+azure-devops-identity-*

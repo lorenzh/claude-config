@@ -24,10 +24,15 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cache_dir="${CLAUDE_STATUSLINE_CACHE_DIR:-$HOME/.cache/claude-statusline}"
 mkdir -p "$cache_dir" 2>/dev/null
 
+# Modification time of a file, GNU and BSD/macOS. 0 when it cannot be read.
+file_mtime() {
+    stat -c %Y -- "$1" 2>/dev/null || stat -f %m -- "$1" 2>/dev/null || echo 0
+}
+
 # Read JSON input from stdin
 input=$(cat)
 
-# Extract values using grep/sed (no jq dependency)
+# Extract values using grep/sed (no jq dependency on the hot path)
 extract_json_string() {
     echo "$input" | grep -o "\"$1\":\"[^\"]*\"" | head -1 | sed 's/.*":"\([^"]*\)"/\1/'
 }
@@ -78,6 +83,10 @@ if [ -n "$ado_org" ] && [ -n "$ado_project" ]; then
     [ "$ado_match" = "*" ] && ado_active=1
 fi
 
+# Cache files are namespaced by org/project/repo, so switching configuration
+# never shows the counts of the previous one. The fetcher derives the same key.
+ado_key=$(printf '%s\n' "${ado_org}/${ado_project}/${ado_repo}" | cksum | cut -d' ' -f1)
+
 # Claude Code subscription account email — extract ONLY the emailAddress field
 # from ~/.claude.json (never tokens or other session data).
 logged_in_user=$(grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude.json" 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/')
@@ -98,7 +107,7 @@ current_time=$(date +%H:%M)
 # if that cache is stale, kicks the fetcher off in the background for next time.
 azure_pr=0
 azure_wi=0
-azure_cache="$cache_dir/azure-devops-cache.json"
+azure_cache="$cache_dir/azure-devops-$ado_key.json"
 azure_fetcher="$script_dir/azure-devops-fetch.sh"
 if [ "$ado_active" = "1" ]; then
     # Read cached counts (grep/sed — no jq on the hot path)
@@ -112,7 +121,7 @@ if [ "$ado_active" = "1" ]; then
     # Refresh in the background if the cache is missing or older than 5 minutes
     refresh=1
     if [ -f "$azure_cache" ]; then
-        cache_age=$(( $(date +%s) - $(stat -c %Y "$azure_cache" 2>/dev/null || echo 0) ))
+        cache_age=$(( $(date +%s) - $(file_mtime "$azure_cache") ))
         [ "$cache_age" -lt "${CLAUDE_STATUSLINE_ADO_TTL:-300}" ] && refresh=0
     fi
     if [ "$refresh" -eq 1 ] && [ -f "$azure_fetcher" ]; then
@@ -148,15 +157,36 @@ format_tokens() {
 input_tokens_fmt=$(format_tokens "$input_tokens")
 output_tokens_fmt=$(format_tokens "$output_tokens")
 
-# Color codes
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
-GRAY='\033[0;90m'
-RESET='\033[0m'
+# Color codes. Real escape characters, not backslash sequences: the finished
+# line is printed with a constant format string and "%s", so a "%" in a branch
+# or directory name cannot be read as a conversion specifier.
+CYAN=$'\033[0;36m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+RED=$'\033[0;31m'
+BLUE=$'\033[0;34m'
+MAGENTA=$'\033[0;35m'
+GRAY=$'\033[0;90m'
+ORANGE=$'\033[38;5;208m'
+RESET=$'\033[0m'
+
+# OSC 8 hyperlink, terminated with BEL: osc8 <url> <text>
+OSC8=$'\033]8;;'
+BEL=$'\007'
+osc8() { printf '%s' "${OSC8}${1}${BEL}${2}${OSC8}${BEL}"; }
+
+# Minimal percent-encoding for the parts of a URL that come from configuration.
+# A space is the case that actually occurs — Azure DevOps project names allow it.
+url_escape() {
+    local s=$1
+    s=${s//%/%25}
+    s=${s// /%20}
+    printf '%s' "$s"
+}
+
+ado_org_url=$(url_escape "$ado_org")
+ado_project_url=$(url_escape "$ado_project")
+ado_repo_url=$(url_escape "$ado_repo")
 
 # --- System resource gauges: CPU / Memory / Swap usage, color-coded ---
 # CPU: delta against the previous invocation's /proc/stat snapshot (cached in
@@ -207,17 +237,17 @@ fi
 # Gauge color: gray (idle) -> green (normal) -> yellow (elevated) -> red (critical)
 gauge_color() {
     local pct=$1
-    if [ "$pct" -lt 25 ] 2>/dev/null; then echo "$GRAY"
-    elif [ "$pct" -lt 60 ] 2>/dev/null; then echo "$GREEN"
-    elif [ "$pct" -lt 85 ] 2>/dev/null; then echo "$YELLOW"
-    else echo "$RED"
+    if [ "$pct" -lt 25 ] 2>/dev/null; then printf '%s' "$GRAY"
+    elif [ "$pct" -lt 60 ] 2>/dev/null; then printf '%s' "$GREEN"
+    elif [ "$pct" -lt 85 ] 2>/dev/null; then printf '%s' "$YELLOW"
+    else printf '%s' "$RED"
     fi
 }
 
 CPU_COLOR=$(gauge_color "$cpu_pct")
 MEM_COLOR=$(gauge_color "$mem_pct")
 SWAP_COLOR=$(gauge_color "$swap_pct")
-sys_status="${CPU_COLOR}C${cpu_pct}%%${RESET} ${MEM_COLOR}M${mem_pct}%%${RESET} ${SWAP_COLOR}S${swap_pct}%%${RESET}"
+sys_status="${CPU_COLOR}C${cpu_pct}%${RESET} ${MEM_COLOR}M${mem_pct}%${RESET} ${SWAP_COLOR}S${swap_pct}%${RESET}"
 
 # Get git information if in a git repo
 if git rev-parse --git-dir > /dev/null 2>&1; then
@@ -243,9 +273,8 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
     work_item=$(echo "$branch" | grep -oE "${CLAUDE_STATUSLINE_BRANCH_ID_PATTERN:-[0-9]{3,}}" | head -1)
     work_item_link=""
     if [ -n "$work_item" ] && [ "$ado_active" = "1" ]; then
-        work_item_url="https://dev.azure.com/${ado_org}/${ado_project}/_workitems/edit/${work_item}"
-        # OSC 8 hyperlink, terminated with BEL (\007) to avoid printf backslash issues
-        work_item_link=" ${GRAY}\033]8;;${work_item_url}\007#${work_item}\033]8;;\007${RESET}"
+        work_item_url="https://dev.azure.com/${ado_org_url}/${ado_project_url}/_workitems/edit/${work_item}"
+        work_item_link=" ${GRAY}$(osc8 "$work_item_url" "#${work_item}")${RESET}"
     fi
 
     git_status="${GREEN}${branch}${RESET}"
@@ -266,15 +295,15 @@ fi
 azure_status=""
 if [ "$azure_pr" -gt 0 ] 2>/dev/null; then
     if [ -n "$ado_repo" ]; then
-        pr_url="https://dev.azure.com/${ado_org}/${ado_project}/_git/${ado_repo}/pullrequests?_a=mine"
+        pr_url="https://dev.azure.com/${ado_org_url}/${ado_project_url}/_git/${ado_repo_url}/pullrequests?_a=mine"
     else
-        pr_url="https://dev.azure.com/${ado_org}/${ado_project}/_pulls?_a=mine"
+        pr_url="https://dev.azure.com/${ado_org_url}/${ado_project_url}/_pulls?_a=mine"
     fi
-    azure_status="${azure_status}${MAGENTA}\033]8;;${pr_url}\007⇄ ${azure_pr}\033]8;;\007${RESET}  "
+    azure_status="${azure_status}${MAGENTA}$(osc8 "$pr_url" "⇄ ${azure_pr}")${RESET}  "
 fi
 if [ "$azure_wi" -gt 0 ] 2>/dev/null; then
-    wi_url="https://dev.azure.com/${ado_org}/${ado_project}/_workitems/assignedtome"
-    azure_status="${azure_status}${BLUE}\033]8;;${wi_url}\007◈ ${azure_wi}\033]8;;\007${RESET}  "
+    wi_url="https://dev.azure.com/${ado_org_url}/${ado_project_url}/_workitems/assignedtome"
+    azure_status="${azure_status}${BLUE}$(osc8 "$wi_url" "◈ ${azure_wi}")${RESET}  "
 fi
 
 # Build final output
@@ -285,17 +314,18 @@ if [ -n "$azure_status" ]; then
     output="${output} ${azure_status}${GRAY}|${RESET}"
 fi
 
-output="${output} ${CYAN}↓${input_tokens_fmt}${RESET} ${MAGENTA}↑${output_tokens_fmt}${RESET} ${GRAY}|${RESET} ${CONTEXT_COLOR}${used_percentage}%%${RESET} ${GRAY}|${RESET} ${GREEN}\$${cost_fmt}${RESET} ${GRAY}|${RESET} ${YELLOW}${model_name}${RESET}"
+output="${output} ${CYAN}↓${input_tokens_fmt}${RESET} ${MAGENTA}↑${output_tokens_fmt}${RESET} ${GRAY}|${RESET} ${CONTEXT_COLOR}${used_percentage}%${RESET} ${GRAY}|${RESET} ${GREEN}\$${cost_fmt}${RESET} ${GRAY}|${RESET} ${YELLOW}${model_name}${RESET}"
 
 # Append reasoning effort behind the model name if present, colored by level
 if [ -n "$effort" ]; then
     case "$effort" in
         low)    EFFORT_COLOR=$GREEN ;;
         medium) EFFORT_COLOR=$YELLOW ;;
-        high)   EFFORT_COLOR='\033[38;5;208m' ;;  # orange
-        *)      EFFORT_COLOR=$RED ;;              # xhigh, max
+        high)   EFFORT_COLOR=$ORANGE ;;
+        *)      EFFORT_COLOR=$RED ;;   # xhigh, max
     esac
     output="${output} ${EFFORT_COLOR}(${effort})${RESET}"
 fi
 
-printf "$output"
+# Constant format string: every field that can carry a "%" goes through %s.
+printf '%s\n' "$output"

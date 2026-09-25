@@ -31,17 +31,36 @@ REPO="${CLAUDE_STATUSLINE_ADO_REPO:-}"
 [ -z "$ORG" ] && exit 0
 [ -z "$PROJ" ] && exit 0
 
-CACHE_DIR="${CLAUDE_STATUSLINE_CACHE_DIR:-$HOME/.cache/claude-statusline}"
-mkdir -p "$CACHE_DIR" 2>/dev/null
-CACHE="$CACHE_DIR/azure-devops-cache.json"
-LOCK="$CACHE_DIR/azure-devops-fetch.lock"
-
 command -v curl >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+CACHE_DIR="${CLAUDE_STATUSLINE_CACHE_DIR:-$HOME/.cache/claude-statusline}"
+mkdir -p "$CACHE_DIR" 2>/dev/null
+
+# Cache files are namespaced by org/project/repo so that switching
+# configuration never shows the counts of the previous one. The statusline
+# derives the same key the same way.
+KEY=$(printf '%s\n' "$ORG/$PROJ/$REPO" | cksum | cut -d' ' -f1)
+CACHE="$CACHE_DIR/azure-devops-$KEY.json"
+ID_CACHE="$CACHE_DIR/azure-devops-identity-$KEY"
+LOCK="$CACHE_DIR/azure-devops-fetch-$KEY.lock"
+
+# Modification time of a file, GNU and BSD/macOS. 0 when it cannot be read.
+file_mtime() {
+    stat -c %Y -- "$1" 2>/dev/null || stat -f %m -- "$1" 2>/dev/null || echo 0
+}
+
+# Percent-encode one URL path segment. Organization, project and repository
+# names may contain spaces and other characters that are not URL-safe.
+url_escape() { jq -rn --arg s "$1" '$s|@uri'; }
+
+ORG_E=$(url_escape "$ORG")
+PROJ_E=$(url_escape "$PROJ")
+REPO_E=$(url_escape "$REPO")
+
 # --- single-flight guard: bail if another fetch is already running (<120s old) ---
 if [ -f "$LOCK" ]; then
-    lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
+    lock_age=$(( $(date +%s) - $(file_mtime "$LOCK") ))
     [ "$lock_age" -lt 120 ] && exit 0
 fi
 touch "$LOCK"
@@ -67,12 +86,11 @@ api() { curl -s --max-time 10 -H "$AUTH_HEADER" "$@"; }
 
 # --- identity: needed to ask "which PRs wait for MY review" -------------------
 MYID="${CLAUDE_STATUSLINE_ADO_USER_ID:-}"
-ID_CACHE="$CACHE_DIR/azure-devops-identity"
 if [ -z "$MYID" ] && [ -f "$ID_CACHE" ]; then
     MYID=$(cat "$ID_CACHE" 2>/dev/null)
 fi
 if [ -z "$MYID" ]; then
-    MYID=$(api "https://dev.azure.com/$ORG/_apis/connectionData?api-version=7.1-preview" \
+    MYID=$(api "https://dev.azure.com/$ORG_E/_apis/connectionData?api-version=7.1-preview" \
         | jq -r '.authenticatedUser.id // empty' 2>/dev/null)
     [ -n "$MYID" ] && printf '%s\n' "$MYID" > "$ID_CACHE"
 fi
@@ -81,9 +99,9 @@ fi
 pr_review=0
 if [ -n "$MYID" ]; then
     if [ -n "$REPO" ]; then
-        PR_URL="https://dev.azure.com/$ORG/$PROJ/_apis/git/repositories/$REPO/pullrequests"
+        PR_URL="https://dev.azure.com/$ORG_E/$PROJ_E/_apis/git/repositories/$REPO_E/pullrequests"
     else
-        PR_URL="https://dev.azure.com/$ORG/$PROJ/_apis/git/pullrequests"
+        PR_URL="https://dev.azure.com/$ORG_E/$PROJ_E/_apis/git/pullrequests"
     fi
     PR_JSON=$(api "$PR_URL?searchCriteria.reviewerId=$MYID&searchCriteria.status=active&api-version=7.1")
     pr_review=$(echo "$PR_JSON" | jq --arg me "$MYID" \
@@ -93,7 +111,7 @@ fi
 
 # --- open work items assigned to me IN THE CURRENT ITERATION ------------------
 WI_JSON=$(curl -s --max-time 10 -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
-  "https://dev.azure.com/$ORG/$PROJ/_apis/wit/wiql?api-version=7.1" \
+  "https://dev.azure.com/$ORG_E/$PROJ_E/_apis/wit/wiql?api-version=7.1" \
   -d '{"query":"SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me AND [System.IterationPath] = @CurrentIteration AND [System.State] <> '\''Closed'\'' AND [System.State] <> '\''Removed'\'' AND [System.State] <> '\''Done'\''"}')
 wi_assigned=$(echo "$WI_JSON" | jq '.workItems | length' 2>/dev/null)
 [ -z "$wi_assigned" ] && wi_assigned=0

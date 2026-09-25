@@ -15,8 +15,17 @@ set -eu
 SRC=$(cd -- "$(dirname -- "$0")" && pwd)
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
-CMD='bash "$HOME/.claude/statusline-command.sh"'
-SNIPPET='"statusLine": { "type": "command", "command": "bash \"$HOME/.claude/statusline-command.sh\"" }'
+
+# The command points at the directory the scripts are actually installed in.
+# For the default location that is written as $HOME/.claude, which stays valid
+# when the settings file is copied to another machine or another user.
+case "$CLAUDE_DIR" in
+    "$HOME/.claude") TARGET='$HOME/.claude' ;;
+    "$HOME/"*)       TARGET='$HOME/'${CLAUDE_DIR#"$HOME/"} ;;
+    *)               TARGET="$CLAUDE_DIR" ;;
+esac
+CMD="bash \"$TARGET/statusline-command.sh\""
+SNIPPET="\"statusLine\": { \"type\": \"command\", \"command\": $(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/') }"
 
 MODE=install
 case "${1:-}" in
@@ -87,8 +96,9 @@ PY
 for tool in git bash; do
     command -v "$tool" >/dev/null 2>&1 || echo "WARNING: '$tool' not on PATH — statusline will degrade" >&2
 done
-stat -c %Y "$SETTINGS" >/dev/null 2>&1 || \
-    echo "WARNING: 'stat -c' unsupported (non-GNU coreutils) — cache-age checks will misbehave" >&2
+if ! stat -c %Y "$SETTINGS" >/dev/null 2>&1 && ! stat -f %m "$SETTINGS" >/dev/null 2>&1; then
+    echo "WARNING: neither 'stat -c %Y' nor 'stat -f %m' works here — cache-age checks will misbehave" >&2
+fi
 if [ -n "${CLAUDE_STATUSLINE_ADO_ORG:-}" ] && [ -n "${CLAUDE_STATUSLINE_ADO_PROJECT:-}" ]; then
     for tool in curl jq; do
         command -v "$tool" >/dev/null 2>&1 || \

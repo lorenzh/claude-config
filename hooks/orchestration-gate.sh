@@ -58,43 +58,30 @@ cat > "$tmp_in" 2>/dev/null || allow
 
 have_jq=0
 command -v jq >/dev/null 2>&1 && have_jq=1
+# Absent jq is one of the conditions this hook fails open on, as the header
+# says. Without it the transcript check degrades to a line-oriented grep that
+# depends on JSON key order, so it can deny a session that did load the skill --
+# and a gate that wedges a session is worse than a gate that misses one.
+[ "$have_jq" -eq 1 ] || allow
 
 # --- field extraction -------------------------------------------------------
 # The whole block is stderr-silenced: a command carrying control characters
 # makes bash warn about null bytes, and hook stderr is noise the user sees.
 {
-if [ "$have_jq" -eq 1 ]; then
-  # One jq pass. Line 1 is the newline-free metadata; everything after it is
-  # the command, which is routinely multiline (heredocs). Truncation and NUL
-  # removal happen inside jq so the huge string never reaches bash.
-  jq -r --argjson n "$MAX_CMD_CHARS" '
-      ([ (if has("agent_id") then "1" else "0" end)
-       , (.tool_name       // "" | tostring)
-       , (.transcript_path // "" | tostring)
-       ] | join("\u0001")),
-      ((.tool_input.command // "" | tostring)[0:$n] | split("\u0000") | join(" "))
-    ' "$tmp_in" > "$tmp_out" 2>/dev/null || allow
-  # Separator is \001, not a tab: bash `read` treats tabs as IFS whitespace and
-  # would collapse empty fields.
-  IFS=$'\001' read -r has_agent tool_name transcript_path < "$tmp_out"
-  command=$(tail -n +2 -- "$tmp_out" 2>/dev/null)
-else
-  # Fallback: crude but good enough to decide allow-vs-deny. Anything we cannot
-  # read confidently ends in allow further down. Only the head and tail of the
-  # payload are scanned; key order is not guaranteed, and a huge command sits
-  # in the middle.
-  edges=$( { head -c 262144 -- "$tmp_in"; printf '\n'; tail -c 262144 -- "$tmp_in"; } 2>/dev/null )
-  if grep -q '"agent_id"[[:space:]]*:' <<<"$edges"; then has_agent=1; else has_agent=0; fi
-  tool_name=$(sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$edges" | head -n1)
-  transcript_path=$(sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$edges" | head -n1)
-  command=$(sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' <<<"$edges" | head -n1)
-  # Un-escape the JSON string enough that the write-shape scan sees real lines.
-  command=${command//\\n/$'\n'}
-  command=${command//\\t/$'\t'}
-  command=${command//\\\"/\"}
-  command=${command//\\\\/\\}
-  command=${command:0:$MAX_CMD_CHARS}
-fi
+# One jq pass. Line 1 is the newline-free metadata; everything after it is
+# the command, which is routinely multiline (heredocs). Truncation and NUL
+# removal happen inside jq so the huge string never reaches bash.
+jq -r --argjson n "$MAX_CMD_CHARS" '
+    ([ (if has("agent_id") then "1" else "0" end)
+     , (.tool_name       // "" | tostring)
+     , (.transcript_path // "" | tostring)
+     ] | join("\u0001")),
+    ((.tool_input.command // "" | tostring)[0:$n] | split("\u0000") | join(" "))
+  ' "$tmp_in" > "$tmp_out" 2>/dev/null || allow
+# Separator is \001, not a tab: bash `read` treats tabs as IFS whitespace and
+# would collapse empty fields.
+IFS=$'\001' read -r has_agent tool_name transcript_path < "$tmp_out"
+command=$(tail -n +2 -- "$tmp_out" 2>/dev/null)
 } 2>/dev/null
 
 # Rule 1 -- subagents are never gated. They are the work. Keyed on the field
@@ -211,27 +198,28 @@ fi
 [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ] || allow
 [ -r "$transcript_path" ] || allow
 
-if [ "$have_jq" -eq 1 ]; then
-  # grep only prefilters; the decision is made by actually parsing the line, so
-  # prose that merely quotes {"name":"Skill"} cannot satisfy the gate.
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    if printf '%s' "$line" | jq -e --arg s "$SKILL_NAME" '
-          [ .. | objects
-          | select(.type == "tool_use" and .name == "Skill")
-          | .input | objects | .skill ] | index($s) != null' >/dev/null 2>&1; then
-      allow
-    fi
-  done < <(head -c "$MAX_SCAN_BYTES" -- "$transcript_path" 2>/dev/null \
-           | grep -F -m "$MAX_CANDIDATES" -- "$SKILL_NAME" 2>/dev/null)
-else
-  # No jq: require the Skill tool name and the skill argument as JSON keys on
-  # the same line. Weaker than parsing, but far tighter than a substring.
-  if head -c "$MAX_SCAN_BYTES" -- "$transcript_path" 2>/dev/null \
-     | grep -m1 -Eq "\"name\"[[:space:]]*:[[:space:]]*\"Skill\".*\"skill\"[[:space:]]*:[[:space:]]*\"$SKILL_NAME\"" ; then
+# grep only prefilters; the decision is made by actually parsing the line, so
+# prose that merely quotes {"name":"Skill"} cannot satisfy the gate.
+head -c "$MAX_SCAN_BYTES" -- "$transcript_path" 2>/dev/null \
+  | grep -F -m "$MAX_CANDIDATES" -- "$SKILL_NAME" > "$tmp_out" 2>/dev/null
+
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  if printf '%s' "$line" | jq -e --arg s "$SKILL_NAME" '
+        [ .. | objects
+        | select(.type == "tool_use" and .name == "Skill")
+        | .input | objects | .skill ] | index($s) != null' >/dev/null 2>&1; then
     allow
   fi
-fi
+done < "$tmp_out"
+
+# Either scan cap being reached means the evidence may lie beyond the cut, and
+# a hook that cannot read its own inputs fails open -- same rule as everywhere
+# else in this file.
+cand_count=$(wc -l < "$tmp_out" 2>/dev/null | tr -d ' ')
+[ "${cand_count:-0}" -ge "$MAX_CANDIDATES" ] 2>/dev/null && allow
+scanned_bytes=$(wc -c < "$transcript_path" 2>/dev/null | tr -d ' ')
+[ "${scanned_bytes:-0}" -gt "$MAX_SCAN_BYTES" ] 2>/dev/null && allow
 
 # Rule 5 -- nothing else allowed it.
 deny

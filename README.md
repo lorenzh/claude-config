@@ -58,8 +58,11 @@ else, and it backs up `settings.json` before it writes. The snippet it adds:
 "statusLine": { "type": "command", "command": "bash \"$HOME/.claude/statusline-command.sh\"" }
 ```
 
-Caches go to `~/.cache/claude-statusline/` (override with `CLAUDE_STATUSLINE_CACHE_DIR`).
-The fetcher is looked up next to the statusline script, so both work from any location.
+Caches go to `~/.cache/claude-statusline/` (override with `CLAUDE_STATUSLINE_CACHE_DIR`),
+with the Azure DevOps files namespaced by org/project/repo so that changing the
+configuration never shows the previous one's counts. The fetcher is looked up next to the
+statusline script, so both work from any location, and `CLAUDE_CONFIG_DIR` is honored —
+the generated `statusLine` command points at wherever the scripts were installed.
 
 ### Azure DevOps segment (optional)
 
