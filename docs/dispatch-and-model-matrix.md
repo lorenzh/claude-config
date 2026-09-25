@@ -90,6 +90,29 @@ essentials.
 ignored** — the agent then runs at the default effort and nothing reports the typo. `model` holds
 the full model id, never the alias.
 
+### Why `update-claude-agents` exists
+
+One file per cell means five files per model, and the set is only correct for the model ids the
+installed Claude Code actually knows. A dispatch to an id the catalog does not list fails with
+"isn't described by this version's model catalog", and every Claude Code release can add ids,
+retire others, and leave an effort series half-written. Hand-editing dozens of near-identical files
+against a moving catalog is exactly the job to give a script.
+
+`update-claude-agents` does that, and it is deliberately not a blind regenerate:
+
+- it reads the model ids out of the installed `claude` binary and prints three lists — models with
+  no pinned files, models whose effort series is incomplete, and pinned files whose model the
+  catalog no longer lists;
+- it confirms each candidate with one real `claude --model <id> -p` call, because a regex over a
+  binary also yields ids that were never real;
+- it asks you, per confirmed model, which efforts to write and whether the model goes on a matrix
+  row or stays reachable-only — the default is **not routed**, since a model without its own
+  measurement has inherited nothing;
+- it writes only missing files and **never overwrites an existing one**, so your own wording
+  survives;
+- it then has you update the matrix in `CLAUDE.md`, table and surrounding prose both, because a
+  sentence like "there is no pinned copy for X" turns false the moment the files exist.
+
 | `subagent_type` | Model | Effort | Matrix tier |
 |---|---|---|---|
 | `gp-opus-5-low` | `claude-opus-5` | low | `aux`, `quick` |

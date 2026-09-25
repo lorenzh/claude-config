@@ -90,6 +90,15 @@ The `plain-writing` linter has its own test suite:
 node skills/plain-writing/scripts/ste-lint.test.mjs
 ```
 
+**Why `update-claude-agents` exists.** The `Agent` tool's `model` parameter takes only an alias
+(`opus`, `sonnet`, `haiku`, `fable`) and has no effort parameter, so "this model at this effort" —
+one cell of the matrix — cannot be dispatched directly. A pinned `gp-<model>-<effort>.md` agent file
+fixes both in frontmatter, which means five files per model, all valid only for the model ids the
+installed Claude Code knows. Every release moves that catalog. The skill syncs the set against it:
+it lists what is missing, incomplete or retired, verifies each id with a real call, asks which
+efforts and which routing a new model gets, and writes only the missing files — instead of you
+hand-editing dozens of near-identical ones.
+
 ## Orchestrator setup
 
 `orchestrating-agent-teams` and `update-claude-agents` assume three things exist:
