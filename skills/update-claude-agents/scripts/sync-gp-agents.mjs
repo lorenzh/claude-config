@@ -207,6 +207,9 @@ function writeAgentFile(dir, model, effort, note) {
     .replaceAll('{{model}}', model)
     .replaceAll('{{effort}}', effort)
     .replaceAll('{{note}}', note);
+  // The agents directory does not exist on a fresh setup, and a bare write
+  // would fail with ENOENT after the access probes have already been paid for.
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(target, body, 'utf8');
   return { path: target, status: 'written' };
 }
