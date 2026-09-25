@@ -117,41 +117,61 @@ hand-editing dozens of near-identical ones.
    Claude Code build offers — run `update-claude-agents`, which generates them against the
    installed model catalog and asks you which efforts and which routing each model gets.
 
-3. **Named teammates**, for the team parts: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, or the
-   `--agent-teams` flag. Without it, plain subagents still work; only named, resumable
-   teammates do not.
+3. **Two keys in `~/.claude/settings.json`** — `env` for named teammates, `hooks` for the
+   gate. Both are optional and independent; the whole setup works with neither, it is just
+   less mechanical.
+
+### settings.json
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/orchestration-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Orchestration gate"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Merge this into the file you already have — do not replace it.** `hooks.PreToolUse` is a
+list, so an existing entry stays next to this one; dropping the block on top of a populated
+`hooks` key silently unhooks whatever was there.
+
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` turns on named, addressable teammates and the team
+frames of `SendMessage`. Without it, one-shot subagents still work — only named and resumable
+ones do not, and the `name` property disappears from the `Agent` tool schema. Passing
+`--agent-teams` on the command line does the same for one launch; it is read straight from
+`argv` and does not appear in `claude --help`, so treat it as undocumented. Either way a
+server-side feature gate can still keep teams off, so a set variable is necessary, not
+sufficient.
 
 ### The gate hook (optional)
 
-`hooks/orchestration-gate.sh` refuses the first write-shaped tool call of a task until the
-session has loaded `orchestrating-agent-teams`. It fails open on everything unexpected — a
-missing transcript, no `jq`, malformed input — and never gates subagents. Escape hatch:
-start the session with `CLAUDE_ORCH_GATE=off`.
+`hooks/orchestration-gate.sh` is the `hooks` half of the snippet above. It refuses the first
+write-shaped tool call of a task until the session has loaded `orchestrating-agent-teams`,
+and never gates subagents — they are the work.
 
 ```bash
 cp hooks/orchestration-gate.sh ~/.claude/hooks/
 ```
 
-```json
-"hooks": {
-  "PreToolUse": [
-    {
-      "matcher": "Bash|Write|Edit|NotebookEdit",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "bash \"$HOME/.claude/hooks/orchestration-gate.sh\"",
-          "timeout": 15,
-          "statusMessage": "Orchestration gate"
-        }
-      ]
-    }
-  ]
-}
-```
-
-Add the block to `~/.claude/settings.json` by hand — merge it with the hooks you already
-have rather than replacing them.
+It **fails open** on anything it cannot read confidently: a missing or unreadable transcript,
+malformed input, either transcript scan cap reached, and a missing `jq`. It needs `jq` to
+decide anything, so on a machine without it the gate is effectively off rather than stuck
+denying. To turn it off for one session, launch with `CLAUDE_ORCH_GATE=off`.
 
 ## License
 

@@ -12,6 +12,10 @@
 server-side gate can still switch the feature off with the variable set, so treat its presence as
 necessary, not sufficient.
 
+It is normally set once, under `env` in `~/.claude/settings.json`, rather than per launch — the same
+file that carries the `PreToolUse` entry for the gate hook. The repository this skill ships in has
+the snippet for both.
+
 Under the flag:
 
 - The `Agent` tool gains `name`, `team_name`, and `mode`. With the flag off these properties are
