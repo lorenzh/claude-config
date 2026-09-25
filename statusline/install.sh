@@ -1,10 +1,7 @@
 #!/bin/bash
-# Installs the statusline for Claude Code: copies the two scripts into
-# ~/.claude, makes them executable, and adds the "statusLine" key to
-# ~/.claude/settings.json. Safe to re-run.
-#
-# It never carries credentials. The Azure DevOps segment is optional and reads
-# its configuration from the environment on the host where it runs.
+# Installs the statusline for Claude Code: copies the script into ~/.claude,
+# makes it executable, and adds the "statusLine" key to ~/.claude/settings.json.
+# Safe to re-run.
 #
 # Usage:
 #   ./install.sh            install and patch settings.json
@@ -16,7 +13,7 @@ SRC=$(cd -- "$(dirname -- "$0")" && pwd)
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
-# The command points at the directory the scripts are actually installed in.
+# The command points at the directory the script is actually installed in.
 # For the default location that is written as $HOME/.claude, which stays valid
 # when the settings file is copied to another machine or another user.
 case "$CLAUDE_DIR" in
@@ -43,9 +40,8 @@ fi
 
 mkdir -p "$CLAUDE_DIR"
 cp "$SRC/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh"
-cp "$SRC/azure-devops-fetch.sh" "$CLAUDE_DIR/azure-devops-fetch.sh"
-chmod +x "$CLAUDE_DIR/statusline-command.sh" "$CLAUDE_DIR/azure-devops-fetch.sh"
-echo "scripts installed -> $CLAUDE_DIR"
+chmod +x "$CLAUDE_DIR/statusline-command.sh"
+echo "script installed -> $CLAUDE_DIR"
 
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 
@@ -92,21 +88,7 @@ with open(path, "w") as f:
 print(f"statusLine written -> {path} (backup: {path}.bak)")
 PY
 
-# Report anything the statusline or its fetcher needs but cannot find.
+# Report anything the statusline needs but cannot find.
 for tool in git bash; do
     command -v "$tool" >/dev/null 2>&1 || echo "WARNING: '$tool' not on PATH — statusline will degrade" >&2
 done
-if ! stat -c %Y "$SETTINGS" >/dev/null 2>&1 && ! stat -f %m "$SETTINGS" >/dev/null 2>&1; then
-    echo "WARNING: neither 'stat -c %Y' nor 'stat -f %m' works here — cache-age checks will misbehave" >&2
-fi
-if [ -n "${CLAUDE_STATUSLINE_ADO_ORG:-}" ] && [ -n "${CLAUDE_STATUSLINE_ADO_PROJECT:-}" ]; then
-    for tool in curl jq; do
-        command -v "$tool" >/dev/null 2>&1 || \
-            echo "NOTE: '$tool' missing — Azure DevOps counts stay at 0" >&2
-    done
-    if [ -z "${CLAUDE_STATUSLINE_ADO_PAT:-${AZURE_DEVOPS_EXT_PAT:-}}" ] && ! command -v az >/dev/null 2>&1; then
-        echo "NOTE: no PAT in the environment and no 'az' CLI — Azure DevOps counts stay at 0" >&2
-    fi
-else
-    echo "NOTE: CLAUDE_STATUSLINE_ADO_ORG / _PROJECT unset — the Azure DevOps segment stays off." >&2
-fi

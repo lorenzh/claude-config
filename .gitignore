@@ -1,16 +1,10 @@
-# statusline caches (they must never be committed)
+# statusline cache state (it must never be committed)
 *.cache
 *-cache.json
 .statusline-*
 cpu-cache
-azure-devops-identity
-*.lock
 
 # editor / OS noise
 .DS_Store
 *.swp
 node_modules/
-
-# namespaced statusline caches, should they ever land next to the scripts
-azure-devops-*.json
-azure-devops-identity-*

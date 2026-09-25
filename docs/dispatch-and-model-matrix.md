@@ -64,9 +64,31 @@ Practical rules:
   still applies.
 
 The `Agent` tool's own `model` parameter takes an alias (`opus`, `sonnet`, `haiku`, `fable`) and has
-no effort parameter, so a matrix cell cannot be dispatched through it directly. The pinned copies in
-`agents/` exist for that — each is the general-purpose agent with `model` and `effort` fixed in
-frontmatter. Copy the ones you want into `~/.claude/agents/`.
+no effort parameter, so a matrix cell cannot be dispatched through it directly. Pinned agent files
+exist for that: one file per cell in `~/.claude/agents/`, each the general-purpose agent with
+`model` and `effort` fixed in its frontmatter. You write them yourself — this repository ships none,
+because the right set depends on which models your Claude Code build actually offers. The
+`update-claude-agents` skill generates and maintains them against the installed model catalog.
+
+One file, `~/.claude/agents/gp-opus-5-medium.md`:
+
+```markdown
+---
+name: gp-opus-5-medium
+description: General-purpose agent pinned to claude-opus-5 at medium effort. The Claude cell for the matrix `standard` tier — implement-medium, verify, review a medium branch, the opening move on a bug hunt.
+model: claude-opus-5
+effort: medium
+---
+
+You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message,
+use the tools available to complete the task. When you complete it, respond with a concise report
+covering what was done and any key findings — the caller will relay it, so it only needs the
+essentials.
+```
+
+`effort` is one of `low`, `medium`, `high`, `xhigh`, `max`, and an unknown value is **silently
+ignored** — the agent then runs at the default effort and nothing reports the typo. `model` holds
+the full model id, never the alias.
 
 | `subagent_type` | Model | Effort | Matrix tier |
 |---|---|---|---|
@@ -76,8 +98,8 @@ frontmatter. Copy the ones you want into `~/.claude/agents/`.
 | `gp-opus-5-xhigh`, `gp-opus-5-max` | `claude-opus-5` | as named | off-matrix — explicit instruction only |
 | `gp-<other model>-{low,medium,high,xhigh,max}` | as named | as named | never-route — explicit instruction only |
 
-The copies for models that are dominated or unmeasured exist so such a model is *reachable* on
-request, not so it is selectable by default. Do not pick one to save money or time, only when a
+Keeping a file for a model that is dominated or unmeasured makes it *reachable* on request, not
+selectable by default. Do not pick one to save money or time, only when a
 human names it, and say that is why when you do.
 
 ## A second dispatcher

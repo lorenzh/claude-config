@@ -1,16 +1,14 @@
 # claude-config
 
 My personal Claude Code setup, with everything company- and project-specific taken out:
-a statusline, five output styles, seven skills, the pinned `gp-*` subagents, and the
-orchestration gate hook.
+a statusline, five output styles, seven skills, and the orchestration gate hook.
 
 Nothing here needs the others. Take the parts you want.
 
 ```
-statusline/     statusline script, Azure DevOps fetcher, install script
+statusline/     statusline script and its install script
 output-styles/  five output styles (German prose, English keywords)
 skills/         seven agent skills
-agents/         pinned gp-<model>-<effort> subagent definitions
 hooks/          PreToolUse orchestration gate
 docs/           the dispatch rules and model matrix the orchestration skills expect
 ```
@@ -20,33 +18,23 @@ docs/           the dispatch rules and model matrix the orchestration skills exp
 One line, rendered from the JSON that Claude Code sends on stdin:
 
 ```
-09:42 | C8% M58% S99% | you@example.com | widgets-web | feature/12345-login #12345 | ⇄ 2  ◈ 3 | ↓2k ↑400 | 12% | $0.50 | Opus 5 (medium)
+09:42 | C8% M58% S99% | you@example.com | widgets-web | feature/12345-login ↑2 ●3 ?1 | ↓2k ↑400 | 12% | $0.50 | Opus 5 (medium)
 ```
 
 From left to right: the time; CPU, memory and swap usage, colored by load; the account
-email of the Claude Code session; the project directory; git (branch, work-item number,
-ahead/behind, staged/unstaged/untracked counts, and a warning when `.git/index.lock`
-exists); the optional Azure DevOps counts; input and output tokens; context used; cost;
-model and reasoning effort.
+email of the Claude Code session; the project directory; git (branch, ahead/behind,
+staged/unstaged/untracked counts, and a warning when `.git/index.lock` exists); input and
+output tokens; context used; cost; model and reasoning effort.
 
-Without Azure DevOps configured the line is the same, minus the `#12345` link and the
-`⇄ 2  ◈ 3` segment:
-
-```
-09:42 | C8% M58% S99% | you@example.com | widgets-web | feature/12345-login | ↓2k ↑400 | 12% | $0.50 | Opus 5 (medium)
-```
-
-The work-item number, the `⇄` count and the `◈` count are OSC 8 hyperlinks — clickable
-in a terminal that supports them.
-
-The statusline never touches the network and never takes `.git/index.lock`: git runs with
-`GIT_OPTIONAL_LOCKS=0`, and the Azure DevOps counts come from a cache file that a detached
-fetcher refreshes in the background.
+The statusline never touches the network and never takes `.git/index.lock` — git runs with
+`GIT_OPTIONAL_LOCKS=0`, so it cannot race your own git commands. Its only state is one
+small file for the CPU gauge, which samples `/proc/stat` against the previous render
+instead of sleeping.
 
 ### Install
 
 ```bash
-statusline/install.sh           # copy the scripts to ~/.claude and patch settings.json
+statusline/install.sh           # copy the script to ~/.claude and patch settings.json
 statusline/install.sh --print   # only print the settings snippet
 statusline/install.sh --force   # replace an existing, different statusLine setting
 ```
@@ -58,39 +46,9 @@ else, and it backs up `settings.json` before it writes. The snippet it adds:
 "statusLine": { "type": "command", "command": "bash \"$HOME/.claude/statusline-command.sh\"" }
 ```
 
-Caches go to `~/.cache/claude-statusline/` (override with `CLAUDE_STATUSLINE_CACHE_DIR`),
-with the Azure DevOps files namespaced by org/project/repo so that changing the
-configuration never shows the previous one's counts. The fetcher is looked up next to the
-statusline script, so both work from any location, and `CLAUDE_CONFIG_DIR` is honored —
-the generated `statusLine` command points at wherever the scripts were installed.
-
-### Azure DevOps segment (optional)
-
-Off unless `CLAUDE_STATUSLINE_ADO_ORG` **and** `CLAUDE_STATUSLINE_ADO_PROJECT` are set.
-With both unset, the segment is never rendered and the fetcher is never started.
-
-| Variable | Required | Meaning |
-|---|---|---|
-| `CLAUDE_STATUSLINE_ADO_ORG` | yes | Azure DevOps organization |
-| `CLAUDE_STATUSLINE_ADO_PROJECT` | yes | project inside that organization |
-| `CLAUDE_STATUSLINE_ADO_REPO` | no | repository for the PR count; unset means all repositories of the project |
-| `CLAUDE_STATUSLINE_ADO_REMOTE_MATCH` | no | glob the `origin` remote must match; default is the org/project (and repo, when named). `*` shows the segment in every repository |
-| `CLAUDE_STATUSLINE_ADO_USER_ID` | no | your identity GUID; resolved from the API and cached when unset |
-| `CLAUDE_STATUSLINE_ADO_PAT` | no | personal access token; `AZURE_DEVOPS_EXT_PAT` is read too |
-| `CLAUDE_STATUSLINE_ADO_TTL` | no | cache lifetime in seconds, default 300 |
-| `CLAUDE_STATUSLINE_CACHE_DIR` | no | cache location, default `~/.cache/claude-statusline` |
-| `CLAUDE_STATUSLINE_BRANCH_ID_PATTERN` | no | regex for the work-item number in the branch name, default `[0-9]{3,}` |
-
-The segment is scoped by the git **remote**, not by the directory name, so the counts and
-links only appear where they are true.
-
-**Authentication comes from your environment, never from this repository.** The fetcher
-uses a PAT from `CLAUDE_STATUSLINE_ADO_PAT` or `AZURE_DEVOPS_EXT_PAT` if one is set,
-otherwise an access token from the Azure CLI (`az login`). With neither, it exits without
-writing anything and the counts stay at 0. It also needs `curl` and `jq`.
-
-A PAT needs read access to Code (pull requests) and Work Items. Export it from your shell
-profile or a secret manager — do not put it in a settings file.
+`CLAUDE_CONFIG_DIR` is honored: the generated command points at wherever the script was
+installed. The CPU gauge's state file goes to `~/.cache/claude-statusline/`, which
+`CLAUDE_STATUSLINE_CACHE_DIR` overrides.
 
 ## Output styles
 
@@ -123,8 +81,8 @@ ln -s "$PWD/skills/plain-writing" ~/.claude/skills/plain-writing
 | `discovering-docs` | Finding the docs a project already has | Node.js for `scripts/docs.mjs` |
 | `writing-skills` | How to author a skill and a `SKILL.md` | — |
 | `recap` | Recap finished work and route what it surfaced into the project's docs | Node.js for `scripts/recap-context.mjs` |
-| `orchestrating-agent-teams` | Dispatch work to subagents instead of doing it in the main session | `docs/dispatch-and-model-matrix.md`, the `gp-*` agents, optionally `hooks/` |
-| `update-claude-agents` | Keep the pinned `gp-*` agent files in sync with the installed model catalog | Node.js, the `gp-*` agents, a model matrix in `CLAUDE.md` |
+| `orchestrating-agent-teams` | Dispatch work to subagents instead of doing it in the main session | `docs/dispatch-and-model-matrix.md`, your own pinned `gp-*` agents, optionally `hooks/` |
+| `update-claude-agents` | Keep the pinned `gp-*` agent files in `~/.claude/agents` in sync with the installed model catalog | Node.js, a model matrix in `CLAUDE.md` |
 
 The `plain-writing` linter has its own test suite:
 
@@ -142,18 +100,13 @@ node skills/plain-writing/scripts/ste-lint.test.mjs
    an example matrix. The benchmark numbers in it are one public run — re-measure before
    you trust them.
 
-2. **The pinned `gp-*` subagents.** The `Agent` tool's `model` parameter takes only the
-   aliases `opus`, `sonnet`, `haiku`, `fable` and has no effort parameter, so a matrix cell
-   cannot be addressed through it. Each file in `agents/` is the general-purpose agent with
-   `model` and `effort` fixed in its frontmatter. Copy the ones whose models you actually
-   have:
-
-   ```bash
-   cp agents/gp-opus-5-*.md ~/.claude/agents/
-   ```
-
-   `update-claude-agents` regenerates and extends this set against the model catalog of your
-   installed Claude Code.
+2. **The pinned `gp-*` subagents**, which you create in `~/.claude/agents/`. The `Agent`
+   tool's `model` parameter takes only the aliases `opus`, `sonnet`, `haiku`, `fable` and
+   has no effort parameter, so a matrix cell cannot be addressed through it. One file per
+   cell fixes `model` and `effort` in its frontmatter; the docs page has a complete example
+   file. This repository ships none, because the right set depends on which models your
+   Claude Code build offers — run `update-claude-agents`, which generates them against the
+   installed model catalog and asks you which efforts and which routing each model gets.
 
 3. **Named teammates**, for the team parts: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, or the
    `--agent-teams` flag. Without it, plain subagents still work; only named, resumable
