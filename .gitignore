@@ -1,0 +1,12 @@
+# statusline caches (they must never be committed)
+*.cache
+*-cache.json
+.statusline-*
+cpu-cache
+azure-devops-identity
+*.lock
+
+# editor / OS noise
+.DS_Store
+*.swp
+node_modules/
